@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Organize Watch Later</title>
+  <link rel="stylesheet" href="organize.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>YouTube Watch Later Organizer</h1>
+      <p class="subtitle">Organize your Watch Later into topic playlists</p>
+    </header>
+
+    <!-- Step 1: Fetch -->
+    <section id="step-fetch" class="step active">
+      <div class="step-header">
+        <span class="step-number">1</span>
+        <h2>Fetching Watch Later</h2>
+        <span id="fetch-status" class="step-badge">In Progress</span>
+      </div>
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div id="fetch-progress-bar" class="progress-fill"></div>
+        </div>
+        <span id="fetch-count" class="progress-text">0 videos found...</span>
+      </div>
+    </section>
+
+    <!-- Step 2: Details -->
+    <section id="step-details" class="step">
+      <div class="step-header">
+        <span class="step-number">2</span>
+        <h2>Loading Video Details</h2>
+        <span id="details-status" class="step-badge">Waiting</span>
+      </div>
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div id="details-progress-bar" class="progress-fill"></div>
+        </div>
+        <span id="details-count" class="progress-text">Fetching descriptions and tags...</span>
+      </div>
+    </section>
+
+    <!-- Step 3: Categorize -->
+    <section id="step-categorize" class="step">
+      <div class="step-header">
+        <span class="step-number">3</span>
+        <h2>Review Categories</h2>
+        <span id="categorize-status" class="step-badge">Waiting</span>
+      </div>
+      <div id="categories-container" class="categories-container">
+        <!-- Populated dynamically -->
+      </div>
+      <div id="category-actions" class="category-actions" style="display:none;">
+        <span id="category-summary" class="category-summary"></span>
+        <button id="create-btn" class="btn-primary">
+          Create Playlists on YouTube
+        </button>
+      </div>
+    </section>
+
+    <!-- Step 4: Create -->
+    <section id="step-create" class="step">
+      <div class="step-header">
+        <span class="step-number">4</span>
+        <h2>Creating Playlists</h2>
+        <span id="create-status" class="step-badge">Waiting</span>
+      </div>
+      <div id="create-list" class="create-list">
+        <!-- Populated dynamically -->
+      </div>
+    </section>
+
+    <!-- Done -->
+    <section id="step-done" class="step" style="display:none;">
+      <div class="done-container">
+        <div class="done-icon">&#10003;</div>
+        <h2>All Done!</h2>
+        <p id="done-summary"></p>
+        <a href="https://www.youtube.com/feed/library" target="_blank" class="btn-secondary">
+          View Your Playlists on YouTube
+        </a>
+      </div>
+    </section>
+
+    <!-- Error -->
+    <section id="step-error" class="step" style="display:none;">
+      <div class="error-container">
+        <div class="error-icon">!</div>
+        <h2>Something went wrong</h2>
+        <p id="error-message"></p>
+        <button id="retry-btn" class="btn-secondary">Retry</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="organize.js"></script>
+</body>
+</html>
