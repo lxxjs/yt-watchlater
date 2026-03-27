@@ -18,9 +18,8 @@ function getInnerTubeContext() {
 // --- Authentication ---
 
 async function getYouTubeCookies() {
-  const cookies = await chrome.cookies.getAll({ domain: '.youtube.com' });
-  const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-  return { cookies, cookieStr };
+  const cookies = await chrome.cookies.getAll({ url: 'https://www.youtube.com' });
+  return cookies;
 }
 
 async function generateSapisidHash(sapisidValue, origin = 'https://www.youtube.com') {
@@ -34,11 +33,21 @@ async function generateSapisidHash(sapisidValue, origin = 'https://www.youtube.c
   return `SAPISIDHASH ${timestamp}_${hashHex}`;
 }
 
-async function getAuthHeaders() {
-  const { cookies, cookieStr } = await getYouTubeCookies();
+function findCookie(cookies, ...names) {
+  for (const name of names) {
+    const cookie = cookies.find(c => c.name === name);
+    if (cookie) return cookie;
+  }
+  return null;
+}
 
-  const sapisid = cookies.find(c => c.name === 'SAPISID');
-  const sid = cookies.find(c => c.name === 'SID');
+async function getAuthHeaders() {
+  const cookies = await getYouTubeCookies();
+
+  // YouTube uses __Secure-3PAPISID / __Secure-1PAPISID in modern Chrome,
+  // falling back to the legacy SAPISID cookie
+  const sapisid = findCookie(cookies, 'SAPISID', '__Secure-3PAPISID', '__Secure-1PAPISID');
+  const sid = findCookie(cookies, 'SID', '__Secure-1PSID', '__Secure-3PSID');
 
   if (!sapisid || !sid) {
     throw new Error('NOT_LOGGED_IN');
@@ -48,7 +57,6 @@ async function getAuthHeaders() {
 
   return {
     'Content-Type': 'application/json',
-    'Cookie': cookieStr,
     'Authorization': authorization,
     'X-Origin': 'https://www.youtube.com',
     'X-Youtube-Client-Name': '1',
@@ -58,45 +66,77 @@ async function getAuthHeaders() {
 
 // --- Fetch Watch Later ---
 
+function findContinuationToken(item) {
+  const renderer = item.continuationItemRenderer;
+  if (!renderer) return null;
+
+  // Path 1: direct continuationCommand
+  if (renderer.continuationEndpoint?.continuationCommand?.token) {
+    return renderer.continuationEndpoint.continuationCommand.token;
+  }
+
+  // Path 2: nested inside commandExecutorCommand.commands[]
+  const commands = renderer.continuationEndpoint?.commandExecutorCommand?.commands;
+  if (commands) {
+    for (const cmd of commands) {
+      // Check for continuationCommand at various depths
+      if (cmd.continuationCommand?.token) return cmd.continuationCommand.token;
+      if (cmd.playlistVotingRefreshPopupCommand?.command?.continuationCommand?.token) {
+        return cmd.playlistVotingRefreshPopupCommand.command.continuationCommand.token;
+      }
+    }
+  }
+
+  // Path 3: button path
+  if (renderer.button?.buttonRenderer?.command?.continuationCommand?.token) {
+    return renderer.button.buttonRenderer.command.continuationCommand.token;
+  }
+
+  // Path 4: use clickTrackingParams as the token itself (some YT versions)
+  // This is actually the continuation param in some responses
+  if (renderer.continuationEndpoint?.clickTrackingParams) {
+    // Deep search for any "token" field in the renderer
+    const tokenStr = JSON.stringify(renderer);
+    const tokenMatch = tokenStr.match(/"token"\s*:\s*"([^"]+)"/);
+    if (tokenMatch) return tokenMatch[1];
+  }
+
+  return null;
+}
+
+function extractPlaylistItems(data) {
+  // Path 1: Initial browse response
+  const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs;
+  const sectionContents = tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
+  const items = sectionContents?.[0]?.itemSectionRenderer?.contents?.[0]?.playlistVideoListRenderer?.contents;
+  if (items) return items;
+
+  // Path 2: Continuation response
+  const actions = data?.onResponseReceivedActions;
+  if (actions) {
+    for (const action of actions) {
+      const contItems = action?.appendContinuationItemsAction?.continuationItems;
+      if (contItems) return contItems;
+    }
+  }
+
+  console.log('[YT-WL] Could not find playlist items. Top-level keys:', Object.keys(data));
+  return null;
+}
+
 function parsePlaylistVideos(data) {
   const videos = [];
   let continuationToken = null;
 
-  // Navigate the response to find video renderers
-  const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs;
-  const sectionContents = tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
-  const playlistItems = sectionContents?.[0]?.itemSectionRenderer?.contents?.[0]?.playlistVideoListRenderer?.contents;
+  const items = extractPlaylistItems(data);
+  if (!items) return { videos, continuationToken };
 
-  if (!playlistItems) {
-    // Try continuation response format
-    const actions = data?.onResponseReceivedActions;
-    if (actions) {
-      for (const action of actions) {
-        const items = action?.appendContinuationItemsAction?.continuationItems;
-        if (items) {
-          for (const item of items) {
-            if (item.playlistVideoRenderer) {
-              videos.push(parseVideoRenderer(item.playlistVideoRenderer));
-            }
-            if (item.continuationItemRenderer) {
-              continuationToken = item.continuationItemRenderer
-                ?.continuationEndpoint?.continuationCommand?.token;
-            }
-          }
-        }
-      }
-      return { videos, continuationToken };
-    }
-    return { videos, continuationToken };
-  }
-
-  for (const item of playlistItems) {
+  for (const item of items) {
     if (item.playlistVideoRenderer) {
       videos.push(parseVideoRenderer(item.playlistVideoRenderer));
     }
     if (item.continuationItemRenderer) {
-      continuationToken = item.continuationItemRenderer
-        ?.continuationEndpoint?.continuationCommand?.token;
+      continuationToken = findContinuationToken(item);
     }
   }
 
@@ -121,6 +161,7 @@ async function fetchWatchLater(onProgress) {
   const response = await fetch(`${INNERTUBE_BASE}/browse?key=${INNERTUBE_API_KEY}`, {
     method: 'POST',
     headers,
+    credentials: 'include',
     body: JSON.stringify({
       context: getInnerTubeContext(),
       browseId: 'VLWL',
@@ -141,6 +182,7 @@ async function fetchWatchLater(onProgress) {
     const contResponse = await fetch(`${INNERTUBE_BASE}/browse?key=${INNERTUBE_API_KEY}`, {
       method: 'POST',
       headers,
+      credentials: 'include',
       body: JSON.stringify({
         context: getInnerTubeContext(),
         continuation: continuationToken,
@@ -168,6 +210,7 @@ async function fetchSingleVideoDetail(videoId, headers) {
     const response = await fetch(`${INNERTUBE_BASE}/next?key=${INNERTUBE_API_KEY}`, {
       method: 'POST',
       headers,
+      credentials: 'include',
       body: JSON.stringify({
         context: getInnerTubeContext(),
         videoId,
@@ -273,6 +316,7 @@ async function createPlaylist(title, videoIds, privacyStatus = 'PRIVATE') {
   const response = await fetch(`${INNERTUBE_BASE}/playlist/create?key=${INNERTUBE_API_KEY}`, {
     method: 'POST',
     headers,
+    credentials: 'include',
     body: JSON.stringify({
       context: getInnerTubeContext(),
       title,
@@ -320,9 +364,9 @@ async function createPlaylists(categories, onProgress, concurrency = 3) {
 
 async function checkAuth() {
   try {
-    const { cookies } = await getYouTubeCookies();
-    const sapisid = cookies.find(c => c.name === 'SAPISID');
-    const sid = cookies.find(c => c.name === 'SID');
+    const cookies = await getYouTubeCookies();
+    const sapisid = findCookie(cookies, 'SAPISID', '__Secure-3PAPISID', '__Secure-1PAPISID');
+    const sid = findCookie(cookies, 'SID', '__Secure-1PSID', '__Secure-3PSID');
     return !!(sapisid && sid);
   } catch {
     return false;
